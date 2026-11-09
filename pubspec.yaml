@@ -1,0 +1,8 @@
+name: quran_audio_backend
+description: Server-side Quran Foundation audio proxy.
+publish_to: none
+environment:
+  sdk: ^3.13.4
+
+dev_dependencies:
+  test: ^1.31.1

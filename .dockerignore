@@ -1,0 +1,7 @@
+.env
+.env.*
+.dart_tool/
+build/
+coverage/
+test/
+README.md
