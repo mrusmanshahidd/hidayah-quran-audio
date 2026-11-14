@@ -2,8 +2,15 @@
   "name": "hidayah-quran-audio",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-14",
+  "keep_vars": true,
   "vars": {
     "QF_ENV": "prelive",
     "QF_ALLOWED_ORIGINS": ""
+  },
+  "secrets": {
+    "required": [
+      "QF_CLIENT_ID",
+      "QF_CLIENT_SECRET"
+    ]
   }
 }
