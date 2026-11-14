@@ -29,12 +29,14 @@ describe("Quran audio Worker", () => {
         expect(String(input)).toBe("https://prelive-oauth2.quran.foundation/oauth2/token");
         expect(init?.method).toBe("POST");
         expect(new Headers(init?.headers).get("Authorization")).toBe("Basic dGVzdC1pZDp0ZXN0LXNlY3JldA==");
+        expect(new Headers(init?.headers).get("User-Agent")).toBe("HidayahAudio/1.0");
         expect(init?.body).toBe("grant_type=client_credentials&scope=content");
         return token();
       }
       expect(String(input)).toBe("https://apis-prelive.quran.foundation/content/api/v4/resources/recitations");
       expect(new Headers(init?.headers).get("x-auth-token")).toBe("test-token");
       expect(new Headers(init?.headers).get("x-client-id")).toBe("test-id");
+      expect(new Headers(init?.headers).get("User-Agent")).toBe("HidayahAudio/1.0");
       return Response.json({ recitations: [
         { id: 7, reciter_name: "Original", translated_name: { name: "Translated" }, style: "Murattal" },
         { id: 0, reciter_name: "Invalid" },
@@ -82,6 +84,7 @@ describe("Quran audio Worker", () => {
   });
 
   it("refreshes on the first 401 and retries exactly once", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     let tokens = 0;
     let contentCalls = 0;
     const upstream = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
@@ -95,9 +98,14 @@ describe("Quran audio Worker", () => {
     expect(response.status).toBe(200);
     expect(tokens).toBe(2);
     expect(contentCalls).toBe(2);
+    expect(log).toHaveBeenCalledWith("QF upstream error", {
+      stage: "content_api", environment: "prelive",
+      path: "/content/api/v4/resources/recitations", status: 401, type: undefined,
+    });
   });
 
   it("stops after the second 401 and never echoes secrets or tokens", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     let tokens = 0;
     let contentCalls = 0;
     const upstream = vi.fn<typeof fetch>().mockImplementation(async (input) => {
@@ -112,6 +120,32 @@ describe("Quran audio Worker", () => {
     expect(body).not.toMatch(/test-secret|sensitive-token|Authorization|Basic/);
     expect(tokens).toBe(2);
     expect(contentCalls).toBe(2);
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/test-secret|sensitive-token|Authorization/);
+  });
+
+  it("logs only a recognized OAuth error type while keeping the response generic", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const upstream = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      error: "invalid_scope", error_description: "test-secret sensitive-token",
+    }, { status: 400 }));
+    const response = await createWorker(upstream).fetch(request("/api/quran/reciters"), env);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Quran audio service is currently unavailable." });
+    expect(log).toHaveBeenCalledWith("QF upstream error", {
+      stage: "oauth_token", environment: "prelive", status: 400, type: "invalid_scope",
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/test-secret|sensitive-token|error_description/);
+  });
+
+  it("omits unrecognized upstream error types from logs", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const upstream = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      error: "test-secret", message: "sensitive-token",
+    }, { status: 403 }));
+    const response = await createWorker(upstream).fetch(request("/api/quran/reciters"), env);
+    expect(response.status).toBe(403);
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/test-secret|sensitive-token/);
   });
 
   it("validates the route and only allows local or configured browser origins", async () => {

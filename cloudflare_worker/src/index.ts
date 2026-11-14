@@ -10,6 +10,13 @@ type JsonObject = Record<string, unknown>;
 type Fetcher = typeof fetch;
 
 const UNAVAILABLE = "Quran audio service is currently unavailable.";
+const USER_AGENT = "HidayahAudio/1.0";
+const SAFE_UPSTREAM_TYPES = new Set([
+  "invalid_scope", "invalid_client", "invalid_request", "unauthorized_client",
+  "access_denied", "insufficient_scope", "invalid_token", "expired_token",
+  "unauthorized", "forbidden", "not_found", "rate_limited",
+  "rate_limit_exceeded", "http_error",
+]);
 const AUTH_BASE: Record<QfEnvironment, string> = {
   prelive: "https://prelive-oauth2.quran.foundation",
   production: "https://oauth2.quran.foundation",
@@ -42,6 +49,17 @@ function configured(env: Env): boolean {
 
 function object(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function safeUpstreamType(response: Response): Promise<string | undefined> {
+  try {
+    const data: unknown = await response.json();
+    if (!object(data)) return undefined;
+    const value = typeof data.type === "string" ? data.type : data.error;
+    return typeof value === "string" && SAFE_UPSTREAM_TYPES.has(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function json(body: unknown, status = 200): Response {
@@ -121,6 +139,7 @@ export function createWorker(upstreamFetch: Fetcher = fetch) {
         headers: {
           Authorization: `Basic ${basic}`,
           "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": USER_AGENT,
         },
         body: "grant_type=client_credentials&scope=content",
         signal: AbortSignal.timeout(12_000),
@@ -128,7 +147,13 @@ export function createWorker(upstreamFetch: Fetcher = fetch) {
     } catch {
       throw new ApiFailure(503, UNAVAILABLE);
     }
-    if (response.status !== 200) throw new ApiFailure(response.status, UNAVAILABLE);
+    if (response.status !== 200) {
+      console.error("QF upstream error", {
+        stage: "oauth_token", environment: target, status: response.status,
+        type: await safeUpstreamType(response),
+      });
+      throw new ApiFailure(response.status, UNAVAILABLE);
+    }
     let data: unknown;
     try {
       data = await response.json();
@@ -166,11 +191,18 @@ export function createWorker(upstreamFetch: Fetcher = fetch) {
             "x-auth-token": usedToken,
             "x-client-id": env.QF_CLIENT_ID!,
             Accept: "application/json",
+            "User-Agent": USER_AGENT,
           },
           signal: AbortSignal.timeout(12_000),
         });
       } catch {
         throw new ApiFailure(503, UNAVAILABLE);
+      }
+      if (response.status !== 200) {
+        console.error("QF upstream error", {
+          stage: "content_api", environment: target, path,
+          status: response.status, type: await safeUpstreamType(response),
+        });
       }
       if (response.status === 401 && attempt === 0) {
         if (token === usedToken) { token = null; expiresAt = 0; }
